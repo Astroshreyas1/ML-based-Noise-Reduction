@@ -1,0 +1,8 @@
+# GPU training / ONNX export: install after requirements.txt. Pick the CUDA index that matches the box.
+# Tested: torch 2.14.0+cu130 on RTX laptop GPU (Windows), onnxruntime 1.23 (CPU).
+# pip install -r requirements-gpu.txt --index-url https://download.pytorch.org/whl/cu130 --extra-index-url https://pypi.org/simple
+torch>=2.3
+torchaudio>=2.3
+onnx>=1.16
+onnxscript>=0.1
+onnxruntime>=1.18

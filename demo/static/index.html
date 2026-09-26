@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ANC-Net demo</title>
+<style>
+  :root {
+    --bg:#eef7f1; --card:#ffffff; --ink:#0f2f22; --muted:#587566; --line:#cfe5d8;
+    --g1:#1fa463; --g2:#0f7a48; --g3:#0b5c37; --mint:#dff5e8; --mint-2:#c4ecd6;
+    --amber:#e08a1e; --amber-soft:#fff2df; --red:#d9482b; --red-soft:#ffe6df;
+    --teal:#0f9d8a; --teal-soft:#dcf5f0; --lime:#8fd14f;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background: radial-gradient(1200px 500px at 10% -10%, #d9f2e4 0%, var(--bg) 55%) fixed; color:var(--ink);
+         font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; padding: 0 20px 60px; }
+
+  header.hero { margin: 22px 0 22px; padding: 26px 28px; border-radius: 18px; color: #fff;
+    background: linear-gradient(120deg, var(--g3) 0%, var(--g2) 45%, var(--g1) 100%);
+    box-shadow: 0 12px 30px rgba(15, 122, 72, .25); position: relative; overflow: hidden; }
+  header.hero:after { content:""; position:absolute; inset:0; background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,.06) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(0deg, rgba(255,255,255,.06) 0 1px, transparent 1px 28px); pointer-events:none; }
+  header.hero h1 { font-size: 26px; font-weight: 700; margin: 0 0 6px; letter-spacing: .2px; }
+  header.hero p { margin: 0; color: #dff5e8; font-size: 15px; max-width: 760px; }
+  .pills { display:flex; gap:8px; flex-wrap:wrap; margin-top: 14px; }
+  .pill { font-size: 12px; font-family: ui-monospace, Menlo, Consolas, monospace; padding: 4px 10px; border-radius: 999px;
+          background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.28); color:#fff; }
+
+  .bar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom: 18px; }
+  select { font: inherit; padding: 9px 12px; border:1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); }
+  label { font-size: 14px; color: var(--muted); display:flex; gap:8px; align-items:center; }
+  button { font: inherit; cursor: pointer; }
+  #rec { font-weight:700; padding: 13px 26px; border: 0; border-radius: 999px; color:#fff; min-width: 200px;
+         background: linear-gradient(135deg, var(--g1), var(--g2)); box-shadow: 0 8px 20px rgba(31,164,99,.35); transition: transform .08s; }
+  #rec:hover { transform: translateY(-1px); }
+  #rec:disabled { background: #a9d5bd; box-shadow:none; cursor: default; transform:none; }
+  #rec.live { background: linear-gradient(135deg, var(--red), #b0331b); box-shadow: 0 8px 20px rgba(217,72,43,.35); animation: pulse 1.1s infinite; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 8px 20px rgba(217,72,43,.35);} 50% { box-shadow: 0 8px 28px rgba(217,72,43,.6);} }
+  #sample { padding: 11px 16px; border:1px solid var(--g1); border-radius: 999px; background: var(--card); color: var(--g2); font-weight: 600; }
+  #sample:hover { background: var(--mint); }
+  .status { color: var(--muted); font-size: 14px; min-height: 20px; }
+
+  .grid { display:grid; grid-template-columns: 1fr; gap: 14px; }
+  .card { background: var(--card); border:1px solid var(--line); border-radius: 14px; padding: 14px 16px 14px 18px; position:relative;
+          box-shadow: 0 4px 14px rgba(15,47,34,.05); }
+  .card.stage { border-left: 6px solid var(--stage); }
+  .card h2 { font-size: 15px; margin: 0 0 8px; font-weight: 700; display:flex; justify-content:space-between; align-items:center; gap: 10px; }
+  .card h2 .badge { display:inline-flex; align-items:center; gap:8px; }
+  .num { display:inline-grid; place-items:center; width: 24px; height: 24px; border-radius: 50%; color:#fff; background: var(--stage); font-size: 13px; }
+  .card h2 small { color: var(--muted); font-weight: 500; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  canvas.wave { width: 100%; height: 76px; display:block; border-radius: 10px; border:1px solid var(--line); background: linear-gradient(180deg, #ffffff, var(--soft)); }
+  audio { width: 100%; margin-top: 8px; height: 34px; }
+  .meta { font-size: 14px; color: var(--muted); line-height: 1.7; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  .tag { display:inline-block; font-size: 12px; padding: 2px 9px; border-radius: 999px; margin: 2px 4px 2px 0; border:1px solid transparent; }
+  .tag.layer { background: var(--amber-soft); color: #8a5000; border-color: #f2d8b2; }
+  .tag.ev { background: var(--red-soft); color: #9a2f16; border-color: #f4c3b5; }
+  .tag.ok { background: var(--mint); color: var(--g3); border-color: var(--mint-2); }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  canvas.strip { width:100%; height: 18px; display:block; border-radius: 6px; border: 1px solid var(--line); background:#fff; margin-top: 6px; }
+
+  .result { display:grid; grid-template-columns: auto 1fr; gap: 18px; align-items:center;
+            background: linear-gradient(120deg, var(--mint) 0%, #f2fbf6 60%, #ffffff 100%); border-color: var(--mint-2); }
+  .delta { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 34px; font-weight: 800; color: var(--g2);
+           padding: 10px 18px; border-radius: 14px; background: #fff; border: 1px solid var(--mint-2); white-space: nowrap; }
+  .delta small { font-size: 14px; font-weight: 600; color: var(--muted); display:block; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; }
+  .chip { background:#fff; border:1px solid var(--line); border-radius: 10px; padding: 6px 10px; font-size: 13px; color: var(--muted); }
+  .chip b { color: var(--ink); font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+  .about { margin-top: 22px; background: linear-gradient(180deg, #ffffff, #f4fbf7); }
+  .about h3 { font-size: 14px; margin: 10px 0 6px; color: var(--g2); font-weight: 700; text-transform: uppercase; letter-spacing: .6px; }
+  .cols { display: grid; grid-template-columns: 1.25fr 1fr; gap: 24px; }
+  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } .result { grid-template-columns: 1fr; } }
+  ol.path { margin: 0; padding: 0; list-style: none; counter-reset: step; font-size: 14px; color: var(--muted); }
+  ol.path li { position: relative; padding-left: 34px; margin: 6px 0; counter-increment: step; }
+  ol.path li:before { content: counter(step); position:absolute; left:0; top: 1px; width: 22px; height: 22px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--g1), var(--teal)); color:#fff; font-size: 12px; font-weight: 700; display:grid; place-items:center; }
+  ol.path b { color: var(--ink); font-weight: 600; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 14px; margin: 0; }
+  dt { color: var(--muted); } dd { margin: 0; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  table.tbl { border-collapse: collapse; font-size: 14px; width: 100%; }
+  table.tbl td, table.tbl th { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: right; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  table.tbl th { color: var(--muted); font-weight: 500; font-family: inherit; }
+  table.tbl td:first-child, table.tbl th:first-child { text-align: left; font-family: inherit; }
+  table.tbl td.up { color: var(--g2); font-weight: 700; background: var(--mint); border-radius: 6px; }
+  footer { margin-top: 26px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="hero">
+    <h1>ANC-Net — battlefield speech enhancement</h1>
+    <p>Press start, speak, press stop. Your clip is layered with a freshly drawn battlefield scene from the dataset pipeline — held-out noise the model never trained on, at a random intensity — then cleaned by ANC-Net.</p>
+    <div class="pills"><span class="pill">8 + 4 ms causal</span><span class="pill">2 mics · boom + reference</span><span class="pill">825 k params</span><span class="pill">gunfire / blast detector</span><span class="pill" id="pill-ckpt">loading model…</span></div>
+  </header>
+
+  <div class="bar">
+    <button id="rec">● Start recording</button>
+    <button id="sample" title="held-out Lombard snippet instead of the microphone">use sample clip</button>
+    <label>Scene <select id="scenario"><option value="random">random</option></select></label>
+    <label>SNR <select id="snr">
+      <option value="">random (−10 … 15 dB)</option><option value="-5">−5 dB</option><option value="0">0 dB</option><option value="5">5 dB</option><option value="10">10 dB</option>
+    </select></label>
+    <span class="status" id="status">ready — allow the microphone when asked (3–30 s)</span>
+  </div>
+
+  <div class="grid" id="results" style="display:none">
+    <div class="card stage" style="--stage:#1fa463; --soft:#e9f8ef">
+      <h2><span class="badge"><span class="num">1</span>Microphone (clean)</span><small id="m-clean"></small></h2>
+      <canvas class="wave" id="c-clean"></canvas><audio id="a-clean" controls></audio>
+    </div>
+    <div class="card stage" style="--stage:#e08a1e; --soft:#fff4e6">
+      <h2><span class="badge"><span class="num">2</span>Battlefield input (boom mic)</span><small id="m-noisy"></small></h2>
+      <canvas class="wave" id="c-noisy"></canvas><audio id="a-noisy" controls></audio>
+      <div class="meta" id="scene"></div>
+    </div>
+    <div class="card stage" style="--stage:#0f9d8a; --soft:#e3f6f2">
+      <h2><span class="badge"><span class="num">3</span>ANC-Net output</span><small id="m-enh"></small></h2>
+      <canvas class="wave" id="c-enh"></canvas><audio id="a-enh" controls></audio>
+      <div class="meta">gunfire / blast detector: <span class="mono" id="evtxt"></span></div>
+      <canvas class="strip" id="c-ev"></canvas>
+    </div>
+    <div class="card result">
+      <div class="delta" id="delta"><small>SI-SNR improvement</small></div>
+      <div class="chips" id="chips"></div>
+    </div>
+  </div>
+
+  <section class="card about" id="about">
+    <h2>About the model <small id="about-ckpt"></small></h2>
+    <div class="cols">
+      <div>
+        <h3>ANC-Net v3 — signal path</h3>
+        <ol class="path">
+          <li><b>Two microphones</b>: boom (talker + battlefield) and ear-cup reference (battlefield, talker 12–18 dB down).</li>
+          <li><b>Asymmetric STFT</b> 256-sample analysis / 128-sample synthesis, hop 64 → 129 bins, 250 frames/s. Algorithmic latency <b>8 ms + 4 ms</b>, fully causal.</li>
+          <li><b>Input maps</b>: complex spectra of both mics + inter-mic log-magnitude ratio + log|boom|.</li>
+          <li><b>Complex conv encoder</b> (4 stages, 16/32/48/64 ch, stride 2 in frequency, one-frame look-back) → 1×1 bottleneck.</li>
+          <li><b>Onset stream</b>: 12 scalars per hop (log-energy, flux, crest of four 1 ms sub-hops) so a 0.3 ms gunshot crack is seen at 1 ms resolution.</li>
+          <li><b>2 × GRU(128)</b> with explicit state — streams hop by hop.</li>
+          <li><b>Heads</b>: gunfire / blast / none per frame (the detector strip above) and a gain g(t) ∈ [0.1, 1] — a learned transient suppressor with instant attack and learned release; the 0.1 floor is the "no blackout" guarantee.</li>
+          <li><b>Complex decoder</b> with skips → tanh-bounded complex ratio mask on the boom spectrum, 3-tap smoothed → iSTFT → × g(t).</li>
+        </ol>
+      </div>
+      <div>
+        <h3>Training</h3>
+        <dl id="about-train"></dl>
+        <h3>Held-out test · 1,072 clips, unseen talkers &amp; noise</h3>
+        <table class="tbl" id="about-test"></table>
+        <p class="meta" id="about-note"></p>
+      </div>
+    </div>
+  </section>
+  <footer>Everything runs locally: dataset chain (<code>ancdata</code>) → ANC-Net v3 (PyTorch) → this page. Docs: docs/MODEL_V3_TRAINING.md, docs/DATASET_V3.md.</footer>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const status = t => $("status").textContent = t;
+
+fetch("/model_info").then(r => r.json()).then(i => {
+  $("about-ckpt").textContent = `checkpoint step ${i.step} · ${(i.params / 1000).toFixed(0)} k params · inference on ${i.device}`;
+  $("pill-ckpt").textContent = `checkpoint ${i.step} · ${i.device}`;
+  const dl = [["parameters", i.params.toLocaleString()],
+              ["training data", i.train_pairs ? `battlefield_v3: ${i.train_pairs.toLocaleString()} pairs / ${i.train_hours} h (real Lombard speech × battlefield scenes)` : "battlefield_v3"],
+              ["optimiser", `AdamW, lr ${i.lr}, cosine; ${(i.steps || 0).toLocaleString()} steps × batch ${i.batch} × ${i.crop_s} s crops, bf16`],
+              ["loss", "−SI-SNR + multi-res STFT (64/256/1024, |X|^0.3) + complex L1 + log-Mel + event CE + event-window SI-SNR + gain hinge"],
+              ["ref augmentation", "ref dropout 30 %, ±6 dB, ±5-sample delay, coherence noise > 1.5 kHz"],
+              ["validation (192 clips)", `SI-SNR improvement +${(i.val_sisnri ?? 0).toFixed(1)} dB · STOI ${(i.val_stoi ?? 0).toFixed(3)}`]];
+  $("about-train").innerHTML = dl.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  if (i.test) {
+    const t = i.test, rows = [["SI-SNR (dB)", t.si_snr_in, t.si_snr, "si_snr"], ["STOI", t.stoi_in, t.stoi, "stoi"], ["PESQ-WB", t.pesq_in, t.pesq, "pesq"]];
+    let h = "<tr><th>metric</th><th>input</th><th>ANC-Net</th><th>Δ</th>" + (i.test_1ch ? "<th>1-mic fallback</th>" : "") + "</tr>";
+    for (const [k, a, b, key] of rows) {
+      const one = i.test_1ch ? i.test_1ch[key] : null;
+      h += `<tr><td>${k}</td><td>${a.toFixed(2)}</td><td>${b.toFixed(2)}</td><td class="up">+${(b - a).toFixed(2)}</td>` + (one != null ? `<td>${one.toFixed(2)}</td>` : "") + "</tr>";
+    }
+    h += `<tr><td>detector</td><td colspan="4" style="text-align:left">recall ${t.event_recall.toFixed(2)} · precision ${t.event_precision.toFixed(2)} · speech blackout inside events ${(t.blackout * 100).toFixed(1)} %</td></tr>`;
+    $("about-test").innerHTML = h;
+    $("about-note").textContent = "Median effective input SNR of the test set is 0 dB (K-weighted draw −8…15 dB); PESQ > 2.5 is reached only above ~12 dB input. The 1-mic column is the same checkpoint with the reference mic zeroed.";
+  }
+}).catch(() => { $("pill-ckpt").textContent = "model info unavailable"; });
+
+fetch("/scenarios").then(r => r.json()).then(list => {
+  for (const s of list) { const o = document.createElement("option"); o.value = s; o.textContent = s.replace(/_/g, " "); $("scenario").appendChild(o); }
+});
+
+function drawWave(canvas, samples, c1, c2) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext("2d"); ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  const grad = ctx.createLinearGradient(0, 0, 0, h); grad.addColorStop(0, c1); grad.addColorStop(0.5, c2); grad.addColorStop(1, c1);
+  ctx.fillStyle = grad;
+  const cols = Math.floor(w / 3), per = Math.max(1, Math.floor(samples.length / cols));
+  for (let i = 0; i < cols; i++) {
+    let m = 0; for (let j = i * per; j < (i + 1) * per && j < samples.length; j++) { const v = Math.abs(samples[j]); if (v > m) m = v; }
+    const bh = Math.max(1.5, m * h * 0.95); ctx.fillRect(i * 3, (h - bh) / 2, 2, bh);
+  }
+}
+function drawStrip(canvas, values) {
+  const dpr = window.devicePixelRatio || 1; const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr; const ctx = canvas.getContext("2d"); ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h); const cw = w / values.length;
+  for (let i = 0; i < values.length; i++) {
+    const v = Math.min(1, values[i]);
+    ctx.fillStyle = v < 0.5 ? `rgba(224,138,30,${v * 1.2})` : `rgba(217,72,43,${0.35 + v * 0.65})`;
+    ctx.fillRect(i * cw, 0, Math.ceil(cw) + 0.5, h);
+  }
+}
+async function decodeToSamples(dataUrl) {
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = await (await fetch(dataUrl)).arrayBuffer();
+  const audio = await ac.decodeAudioData(buf);
+  const s = audio.getChannelData(0); ac.close(); return s;
+}
+function encodeWav(float32, sampleRate) {
+  const n = float32.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); str(8, "WAVE"); str(12, "fmt "); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, "data"); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) { const s = Math.max(-1, Math.min(1, float32[i])); v.setInt16(44 + i * 2, s < 0 ? s * 32768 : s * 32767, true); }
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+let recState = null;   // {ac, src, proc, stream, chunks, total, timer, t0}
+
+async function startRecording() {
+  const btn = $("rec");
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  const src = ac.createMediaStreamSource(stream);
+  const proc = ac.createScriptProcessor(4096, 1, 1);
+  const st = { ac, src, proc, stream, chunks: [], total: 0, t0: Date.now(), timer: null };
+  const max = ac.sampleRate * 30;
+  proc.onaudioprocess = e => { if (st.total < max) { const d = e.inputBuffer.getChannelData(0); st.chunks.push(new Float32Array(d)); st.total += d.length; } };
+  src.connect(proc); proc.connect(ac.destination);
+  st.timer = setInterval(() => {
+    const s = (Date.now() - st.t0) / 1000;
+    status(`recording… ${s.toFixed(1)} s`); btn.textContent = `■ Stop (${s.toFixed(0)} s)`;
+    if (s >= 30) stopRecording();
+  }, 200);
+  recState = st;
+  btn.classList.add("live"); btn.textContent = "■ Stop"; status("recording… speak");
+}
+
+async function stopRecording() {
+  const st = recState; if (!st) return; recState = null;
+  clearInterval(st.timer);
+  st.proc.disconnect(); st.src.disconnect(); st.stream.getTracks().forEach(t => t.stop());
+  const all = new Float32Array(st.total); let o = 0;
+  for (const c of st.chunks) { all.set(c, o); o += c.length; }
+  const rate = st.ac.sampleRate; st.ac.close();
+  const btn = $("rec"); btn.classList.remove("live"); btn.disabled = true; btn.textContent = "processing…";
+  status(`${(st.total / rate).toFixed(1)} s recorded — layering a battlefield scene + running ANC-Net…`);
+  try {
+    const fd = new FormData(); fd.append("audio", encodeWav(all, rate), "mic.wav");
+    fd.append("scenario", $("scenario").value); fd.append("snr", $("snr").value);
+    const j = await (await fetch("/process", { method: "POST", body: fd })).json();
+    if (j.error) { status("error: " + j.error); return; }
+    await show(j);
+    status(`done — ${j.seconds} s clip, play the three clips`);
+  } catch (e) { status("error: " + e.message); }
+  finally { btn.disabled = false; btn.textContent = "● Start recording"; }
+}
+
+async function record() {
+  try { if (recState) await stopRecording(); else await startRecording(); }
+  catch (e) { status("error: " + e.message); $("rec").classList.remove("live"); $("rec").textContent = "● Start recording"; }
+}
+
+async function show(j) {
+  $("results").style.display = "grid";
+  for (const [key, cid, aid, c1, c2] of [["clean", "c-clean", "a-clean", "#1fa463", "#7fd6a7"], ["noisy", "c-noisy", "a-noisy", "#e08a1e", "#f4c37c"], ["enhanced", "c-enh", "a-enh", "#0f9d8a", "#7fd7c9"]]) {
+    $(aid).src = j[key]; drawWave($(cid), await decodeToSamples(j[key]), c1, c2);
+  }
+  $("m-clean").textContent = "level-normalised";
+  $("m-noisy").textContent = `SI-SNR ${j.si_snr_in} dB`;
+  $("m-enh").textContent = `SI-SNR ${j.si_snr_out} dB · ${j.t_infer_ms} ms for ${j.seconds} s`;
+  const layers = j.layers.map(l => `<span class="tag layer">${l}</span>`).join("");
+  const ev = j.events.length ? j.events.map(e => `<span class="tag ev">${e.cat.replace("gunfire_", "")} @ ${e.t.toFixed(1)} s (${e.db > 0 ? "+" : ""}${e.db} dB)</span>`).join("") : `<span class="tag ok">no transients</span>`;
+  $("scene").innerHTML = `scene <b>${j.scenario.replace(/_/g, " ")}</b> · SNR <b>${j.snr_db} dB</b> <span class="mono">(K-weighted; ${j.snr_effective_db} dB RMS)</span><br>${layers}<br>${ev}`;
+  drawStrip($("c-ev"), j.p_event);
+  const pk = Math.max(...j.p_event);
+  $("evtxt").textContent = pk > 0.5 ? `fired (peak p = ${pk.toFixed(2)})` : `quiet (peak p = ${pk.toFixed(2)})`;
+  const d = j.si_snr_out - j.si_snr_in;
+  $("delta").innerHTML = `${d > 0 ? "+" : ""}${d.toFixed(1)} dB<small>SI-SNR improvement</small>`;
+  $("chips").innerHTML = [
+    ["input", `${j.si_snr_in} dB`], ["output", `${j.si_snr_out} dB`], ["clip", `${j.seconds} s`],
+    ["scene render", `${j.t_layer_ms} ms`], ["inference", `${j.t_infer_ms} ms`], ["noise pools", j.noise_split], ["checkpoint", `step ${j.model_step}`],
+  ].map(([k, v]) => `<span class="chip">${k} <b>${v}</b></span>`).join("");
+}
+$("rec").addEventListener("click", record);
+$("sample").addEventListener("click", async () => {
+  const btn = $("sample"); btn.disabled = true; status("layering a battlefield scene + running ANC-Net…");
+  try {
+    const fd = new FormData(); fd.append("sample", "1"); fd.append("scenario", $("scenario").value); fd.append("snr", $("snr").value);
+    const j = await (await fetch("/process", { method: "POST", body: fd })).json();
+    if (j.error) { status("error: " + j.error); return; }
+    await show(j); status(`done — ${j.seconds} s clip, play the three clips`);
+  } catch (e) { status("error: " + e.message); } finally { btn.disabled = false; }
+});
+</script>
+</body>
+</html>

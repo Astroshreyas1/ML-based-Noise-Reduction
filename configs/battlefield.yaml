@@ -1,0 +1,116 @@
+# Battlefield dataset v3 — the config IS the specification. Every probability,
+# range and pool name lives here; the order of operations is code
+# (ancdata/battlefield.py). Background and verdicts: docs/NOISE_LAYERING.md;
+# what the built set looks like: docs/DATASET_V3.md.
+name: battlefield_v3
+seed: 20260917
+sample_rate: 16000              # LOCKED (STOI / PESQ-WB band)
+segment_seconds: 6.0            # the Lombard snippets are 6 s; a pass-by / burst needs the room to evolve
+channels: [boom, ref]           # ch0 = boom mic (the target's input), ch1 = ear-cup reference mic
+target: dry_x_agc               # dry Lombard speech at speech_level_db, times the boom AGC gain trajectory
+
+speech:
+  snippets: snippets/lombard6s  # under ANC_DATA_ROOT; built by `ancdata snippets --seconds 6`
+  lombard_class_only: true      # GRID Lombard + AVID loud / veryloud
+  level_db: {dist: uniform, low: -32, high: -18}     # active-level dBFS of the dry speech
+  max_scenes_per_snippet: {train: 10, val: 4, test: 8}   # dataset size cap: index -> snippet = index mod n
+
+mix:
+  snr_db: {dist: uniform, low: -8, high: 15}          # K-weighted loudness (BS.1770): L(speech) - L(scene)
+  layers_secondary_below_db: {dist: uniform, low: 2, high: 12}
+  bed2:                                                # second, rougher bed of the same class
+    rel_db: {dist: uniform, low: -8, high: -3}
+    gust_depth_db: {dist: uniform, low: 4, high: 12}
+    gust_rate_hz: {dist: uniform, low: 0.8, high: 3.0}
+  texture:                                             # short hits 8-20 dB under the bed (hard negatives too)
+    count: {dist: uniform_int, low: 3, high: 8}
+    pools: [esc50_footsteps, esc50_door_wood_knock, esc50_can_opening, mad_footsteps, esc50_clapping, fsd_hardneg]
+    dur_s: {dist: uniform, low: 0.3, high: 1.5}
+    rel_db: {dist: uniform, low: -20, high: -8}
+  buffets:                                             # low-frequency capsule buffets (wind on the boom)
+    count: {dist: uniform_int, low: 2, high: 6}
+    dur_s: {dist: uniform, low: 0.08, high: 0.4}
+    rel_db: {dist: uniform, low: -6, high: 6}
+  envelopes:                                           # scene.py apply_envelope parameters
+    gust_depth_db: {dist: uniform, low: 3, high: 10}
+    gust_rate_hz: {dist: uniform, low: 0.2, high: 1.0}
+    ramp_db: {dist: uniform, low: 6, high: 15}
+    passby_peak_db: {dist: uniform, low: 6, high: 12}
+    doppler_max_pct: 2.0
+
+gunfire:
+  p: 0.5                                               # fraction of clips with small-arms fire
+  bursts: {dist: uniform_int, low: 1, high: 2}
+  auto_p: 0.6
+  rounds_auto: {dist: uniform_int, low: 4, high: 9}
+  rounds_semi: {dist: uniform_int, low: 2, high: 4}
+  spacing_auto_s: {dist: uniform, low: 0.067, high: 0.092}   # 650-900 rpm
+  spacing_semi_s: {dist: uniform, low: 0.15, high: 0.4}
+  source_p: {physics: 0.5, field: 0.3, mad: 0.2}
+  peak_ratio_db: {dist: uniform, low: -3, high: 10}          # burst peak vs speech peak (trial 2 was 0..14: "slightly too hot")
+  tail_tau_s: {dist: uniform, low: 0.08, high: 0.25}
+  tail_db: {dist: uniform, low: -18, high: -10}
+  distant_p: 0.6                                             # an extra dull, quiet burst
+  distant_peak_ratio_db: {dist: uniform, low: -12, high: 0}
+  distant_rounds: {dist: uniform_int, low: 3, high: 8}
+  distant_spacing_s: {dist: uniform, low: 0.08, high: 0.12}
+  distant_tail_tau_s: {dist: uniform, low: 0.15, high: 0.35}
+  distant_tail_db: {dist: uniform, low: -12, high: -6}
+
+blasts:
+  p: 0.4
+  count: {dist: uniform_int, low: 1, high: 2}
+  source_p: {physics: 0.5, mad: 0.5}
+  peak_ratio_db: {dist: uniform, low: -6, high: 8}
+
+wind:
+  pools: [esc50_wind, fsd_wind]
+  rel_db: {dist: uniform, low: -10, high: 0}
+  gust_depth_db: {dist: uniform, low: 3, high: 10}
+  gust_rate_hz: {dist: uniform, low: 0.2, high: 1.0}
+
+channel:                        # ancdata/channel.py capsule_channel (boom); shared AGC gain goes to the target
+  hp_hz: 90.0
+  presence_hz: 3000.0
+  presence_db: 3.0
+  presence_q: 1.0
+  lp_hz: 6800.0
+  floor_dbfs: -55.0
+  drive: 1.4
+  agc_threshold_dbfs: -8.0
+  agc_release_ms: 250.0
+  makeup_db: 6.0
+  bits: 16
+  radio_p: 0.0                  # tactical-radio proxy on the boom (band-limit + mu-law + drops); off by default
+
+ref:                            # ear-cup reference mic: noise-dominated, speech-poor
+  speech_db: {dist: uniform, low: -18, high: -12}      # speech level on the ref relative to the boom
+  noise_db: {dist: uniform, low: 1, high: 3}           # scene level on the ref relative to the boom
+  channel: {hp_hz: 60.0, presence_db: 0.0, lp_hz: 7200.0, floor_dbfs: -52.0, drive: 1.2,
+            agc_threshold_dbfs: -6.0, agc_release_ms: 150.0, makeup_db: 3.0, bits: 16}
+
+# Scenarios: bed = continuous layer (pool alternatives, envelope), events = foreground layers,
+# wind_p = chance of a capsule-local wind layer, gunfire_scale multiplies gunfire.p, blast_scale blasts.p.
+# `real_passby` places a real 2 s recording (IDMT) with its own Doppler at a random time.
+scenarios:
+  - {name: convoy_idle,     weight: 1.0, bed: [[mad_vehicle, fsd_engine, us8k_engine_idling], steady], events: [[[idmt_truck, idmt_bus], real_passby]], wind_p: 0.6}
+  - {name: helo_lz,         weight: 1.0, bed: [[esc50_wind, fsd_wind], gust], events: [[[mad_helicopter, esc50_helicopter], approach]], wind_p: 1.0}
+  - {name: firefight,       weight: 1.2, bed: [[demand_nfield, fsd_wind], steady], events: [[[mad_vehicle, fsd_engine], recede]], wind_p: 0.5, gunfire_scale: 1.6}
+  - {name: artillery,       weight: 0.8, bed: [[esc50_wind, fsd_wind], gust], events: [[[mad_shelling, fsd_explosion], steady], [[mad_shelling, fsd_explosion], steady]], wind_p: 1.0, blast_scale: 2.0}
+  - {name: jet_flyover,     weight: 0.8, bed: [[demand_nfield, demand_npark], steady], events: [[[mad_fighter, fsd_aircraft, esc50_airplane], passby]], wind_p: 0.7}
+  - {name: drone_overhead,  weight: 0.8, bed: [[demand_npark, demand_nfield], steady], events: [[[drone], gust]], wind_p: 0.4}
+  - {name: urban_patrol,    weight: 1.0, bed: [[demand_straffic, demand_spsquare], steady], events: [[[esc50_siren, fsd_siren, us8k_siren], passby], [[idmt_car], real_passby]], wind_p: 0.3}
+  - {name: armour_moving,   weight: 1.0, bed: [[mad_vehicle], steady], events: [[[mad_vehicle, fsd_engine], passby], [[mad_helicopter], recede]], wind_p: 0.5}
+  - {name: rain_ambush,     weight: 0.8, bed: [[esc50_rain, fsd_rain], gust], events: [[[esc50_thunderstorm, fsd_thunder], gust]], wind_p: 0.6}
+  - {name: engine_room,     weight: 0.6, bed: [[esc50_engine, fsd_engine, us8k_engine_idling], steady], events: [[[esc50_chainsaw, us8k_jackhammer], gust]], wind_p: 0.0}
+  - {name: field_quiet,     weight: 0.8, bed: [[demand_nfield, demand_npark, demand_nriver], steady], events: [], wind_p: 0.8, gunfire_scale: 0.4, blast_scale: 0.5}
+  - {name: vehicle_interior, weight: 0.8, bed: [[demand_tbus, demand_tcar, demand_tmetro], steady], events: [[[fsd_engine, us8k_engine_idling], gust]], wind_p: 0.0, gunfire_scale: 0.3}
+  - {name: distant_battle,  weight: 0.8, bed: [[demand_nfield, fsd_wind], steady], events: [[[mad_shelling, fsd_explosion], recede]], wind_p: 0.7, gunfire_scale: 0.6, distant_only: true}
+
+pools:
+  cache_mb: 512                 # per-process decode cache (memory-aware pooling: workers = f(RAM, cache_mb))
+  allow_voice: false            # never use files the voice screen flagged
+
+build:
+  fmt: {train: flac, val: flac, test: float}   # float32 WAV for the frozen test set, FLAC for the big dumps
+  worker_mb: 900                # RAM budget per worker (cache_mb + decode/scratch); auto worker count uses this

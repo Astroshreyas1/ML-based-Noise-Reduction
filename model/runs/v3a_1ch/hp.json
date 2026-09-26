@@ -1,0 +1,41 @@
+{
+ "data_root": "C:\\Users\\Shreyas\\Desktop\\ANC\\data\\battlefield_v3",
+ "batch": 8,
+ "crop_s": 4.0,
+ "steps": 40000,
+ "lr": 0.0005,
+ "lr_min": 1e-05,
+ "warmup": 1000,
+ "weight_decay": 0.01,
+ "grad_clip": 5.0,
+ "amp": "bf16",
+ "workers": 3,
+ "val_every": 2000,
+ "val_pairs": 192,
+ "val_stoi_pairs": 48,
+ "seed": 0,
+ "widths": [
+  16,
+  32,
+  48,
+  64
+ ],
+ "gru_hidden": 128,
+ "gru_layers": 2,
+ "ref_dropout_p": 1.0,
+ "ref_gain_db": 6.0,
+ "ref_delay_max": 5,
+ "ref_noise_p": 0.5,
+ "ref_noise_db": [
+  -6.0,
+  0.0
+ ],
+ "ref_noise_hz": 1500.0,
+ "w_sisnr": 1.0,
+ "w_mrstft": 1.0,
+ "w_ri": 0.3,
+ "w_mel": 0.2,
+ "w_event": 0.3,
+ "w_evwin": 0.3,
+ "w_gain": 0.05
+}

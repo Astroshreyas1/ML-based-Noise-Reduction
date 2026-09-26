@@ -1,0 +1,82 @@
+# Smoke-test config: synthetic fixture piles, every stage exercised. Not for training.
+# Training chain. The config IS the specification: every probability, range and
+# source weight lives here. Reordering the chain is a code change; everything
+# else is a config edit. See docs/CHAIN.md for the physics behind each stage.
+seed: 20260911
+sample_rate: 16000          # LOCKED. STOI / PESQ-WB are defined here; 48 kHz = future flag
+segment_seconds: 4.0        # LOCKED
+target: dry                 # LOCKED. Target = dry calm speech, captured before Lombard/reverb
+channels: [boom, ref]       # ch0 = boom mic (near-field), ch1 = external reference mic
+
+speech_min_active_db: -35.0 # reject segments that are mostly pause
+speech_level_db: {dist: uniform, low: -32, high: -18}
+
+sources:
+  speech:
+    - {name: fixture_speech, weight: 1.0}
+  ambience:
+    - {name: fixture_noise, weight: 0.7}
+    - {type: parametric, generator: rotor, weight: 0.3}
+  impulsive:
+    - {type: parametric, generator: friedlander, weight: 0.7,
+       params: {standoff_m: {dist: loguniform, low: 10, high: 500}, T_ms: {dist: uniform, low: 0.3, high: 4.0},
+                burst: {dist: uniform_int, low: 1, high: 3}}}
+    - {name: fixture_gunshot, weight: 0.3}
+  hard_negative:
+    - {name: fixture_hardneg, weight: 1.0}
+
+holdout:
+  mode: exclude               # training never sees holdout_group rows
+  group: gen                  # ESC-50 fireworks + thunderstorm, MAD shelling
+
+scene:                        # noise scene: several concurrent, time-varying sources (ancdata/scene.py)
+  layers: {dist: uniform_int, low: 1, high: 3}
+  secondary_below_db: {dist: uniform, low: 2, high: 12}   # non-dominant layers relative to the dominant one
+  gust_depth_db: {dist: uniform, low: 3, high: 10}
+  gust_rate_hz: {dist: uniform, low: 0.2, high: 1.0}
+  ramp_db: {dist: uniform, low: 6, high: 15}              # approach / recede
+  passby_peak_db: {dist: uniform, low: 6, high: 12}
+  doppler_max_pct: 2.0
+
+lombard:                      # WORLD-domain vocal-effort transform on the speech itself (docs/CHAIN.md)
+  probability: 0.7
+  coupling:                   # strength = base + (snr_ref - scene SNR) / span + N(0, jitter), clipped [min, 1]
+    base: 0.45                # Lombard slope: louder ambient => more effort (Lu & Cooke 2008)
+    snr_ref_db: 5.0
+    snr_span_db: 20.0
+    jitter: 0.15
+    min: 0.15
+  stats_file: null
+
+reverb:
+  probability: 0.7
+  dry_categories: [wind]      # capsule turbulence, added dry at the mic
+  dry_ref_atten_db: {dist: uniform, low: 8, high: 16}   # ref-mic speech level when no room is used
+
+mix_ambience:
+  snr_db: {dist: triangular, low: -5, mode: 2, high: 20}   # weight the hard (negative) end
+
+impulsive:
+  probability: 0.6
+  count: {dist: uniform_int, low: 1, high: 3}
+  peak_ratio_db: {dist: uniform, low: -6, high: 18}       # vs speech PEAK, not global SNR
+  through_room: true
+
+hard_negative:
+  probability: 0.5
+  peak_ratio_db: {dist: uniform, low: -6, high: 12}
+  through_room: true
+
+mic:
+  ir_file: null
+  proximity_boost_db: {dist: uniform, low: 0, high: 8}
+  proximity_hz: 150
+
+adc:                          # applied after mixing; NO post-mix normalisation anywhere
+  probability: 0.7
+  headroom_db: {dist: uniform, low: -1, high: 6}          # negative = deliberate overload
+  bits: 16
+
+codec:                        # radio-uplink proxy on the boom channel
+  probability: 0.5
+  dropout_p: 0.02

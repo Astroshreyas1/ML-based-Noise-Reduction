@@ -1,0 +1,98 @@
+# Frozen generalisation eval set: ambience drawn ONLY from the held-out group
+# (ESC-50 fireworks + thunderstorm; MAD shelling if screened). Harder: SNR -5..10, ADC always on.
+# materialise once: ancdata materialize --config configs/eval_generalization.yaml --split test --n 1000
+# Training chain. The config IS the specification: every probability, range and
+# source weight lives here. Reordering the chain is a code change; everything
+# else is a config edit. See docs/CHAIN.md for the physics behind each stage.
+seed: 2
+sample_rate: 16000          # LOCKED. STOI / PESQ-WB are defined here; 48 kHz = future flag
+segment_seconds: 4.0        # LOCKED
+target: dry                 # LOCKED. Target = dry calm speech, captured before Lombard/reverb
+channels: [boom, ref]       # ch0 = boom mic (near-field), ch1 = external reference mic
+
+speech_min_active_db: -35.0 # reject segments that are mostly pause
+speech_level_db: {dist: uniform, low: -32, high: -18}   # target RMS; input speech tracks it (level diversity)
+
+sources:
+  speech:
+    - {name: librispeech, weight: 1.0}
+    # - {name: local_speakers, weight: 0.0}   # eval only; listed for the registry
+  ambience:
+    - {name: esc50,          weight: 0.6}     # helicopter, engine, siren, wind, rain, chainsaw, ...
+    # parametric rotor deliberately absent: it is a SEEN class; this set is unseen ambience only
+    - {name: mad_vehicle,    weight: 0.0}     # raise to ~0.3 after `ancdata screen --pile mad_*`
+    - {name: mad_helicopter, weight: 0.0}
+    - {name: mad_fighter,    weight: 0.0}
+  impulsive:
+    - type: parametric
+      generator: friedlander
+      weight: 1.0
+      params:
+        standoff_m:   {dist: loguniform, low: 10, high: 500}   # log: perception ~ log(distance)
+        T_ms:         {dist: uniform, low: 0.3, high: 4.0}     # positive-phase duration
+        height_m:     {dist: uniform, low: 1.0, high: 2.0}
+        supersonic_p: 0.6                                      # N-wave crack precedes blast
+        burst:        {dist: uniform_int, low: 1, high: 3}     # single / 3-round
+        cyclic_ms:    {dist: uniform, low: 80, high: 140}
+    - {name: field_gunshots, weight: 0.0}     # real range recordings if obtained
+    # esc50_gunshot (UrbanSound8K) and mad_gunshot are eval-only; never listed here
+  hard_negative:
+    - {name: esc50,            weight: 0.7}   # clapping, door knock, glass, footsteps, ...
+    - {name: local_transients, weight: 0.3}   # own recordings (bag pops, slams)
+    - {name: mad_footsteps,    weight: 0.0}
+
+holdout:
+  mode: only                  # draw ambience only from the held-out group
+  group: gen                  # ESC-50 fireworks + thunderstorm, MAD shelling
+
+scene:                        # noise scene: several concurrent, time-varying sources (ancdata/scene.py)
+  layers: {dist: uniform_int, low: 1, high: 3}
+  secondary_below_db: {dist: uniform, low: 2, high: 12}   # non-dominant layers relative to the dominant one
+  gust_depth_db: {dist: uniform, low: 3, high: 10}
+  gust_rate_hz: {dist: uniform, low: 0.2, high: 1.0}
+  ramp_db: {dist: uniform, low: 6, high: 15}              # approach / recede
+  passby_peak_db: {dist: uniform, low: 6, high: 12}
+  doppler_max_pct: 2.0
+
+lombard:                      # WORLD-domain vocal-effort transform on the speech itself (docs/CHAIN.md)
+  probability: 0.7
+  coupling:                   # strength = base + (snr_ref - scene SNR) / span + N(0, jitter), clipped [min, 1]
+    base: 0.45                # Lombard slope: louder ambient => more effort (Lu & Cooke 2008)
+    snr_ref_db: 5.0
+    snr_span_db: 20.0
+    jitter: 0.15
+    min: 0.15
+  stats_file: configs/lombard_stats.yaml   # written by `ancdata lombard-fit`; literature defaults until then
+
+reverb:
+  probability: 0.7
+  dry_categories: [wind]      # capsule turbulence, added dry at the mic
+  dry_ref_atten_db: {dist: uniform, low: 8, high: 16}   # ref-mic speech level when no room is used
+
+mix_ambience:
+  snr_db: {dist: uniform, low: -5, high: 10}
+
+impulsive:
+  probability: 0.5
+  count: {dist: uniform_int, low: 1, high: 3}
+  peak_ratio_db: {dist: uniform, low: -6, high: 18}       # vs speech PEAK, not global SNR
+  through_room: true
+
+hard_negative:
+  probability: 0.15
+  peak_ratio_db: {dist: uniform, low: -6, high: 12}
+  through_room: true
+
+mic:
+  ir_file: configs/mic_ir.npz
+  proximity_boost_db: {dist: uniform, low: 0, high: 8}
+  proximity_hz: 150
+
+adc:                          # applied after mixing; NO post-mix normalisation anywhere
+  probability: 1.0
+  headroom_db: {dist: uniform, low: -1, high: 6}          # negative = deliberate overload
+  bits: 16
+
+codec:                        # radio-uplink proxy on the boom channel
+  probability: 0.0            # see configs/train_codec.yaml
+  dropout_p: 0.02
