@@ -126,3 +126,23 @@ def test_gunfire_rate_and_scenarios():
     assert 0.35 < rate < 0.65
     assert len({q["scenario"] for q in plans}) >= 10
     assert all(0 <= q["index"] % ch.n_snippets < ch.n_snippets for q in plans)
+
+
+def test_v31_logic_deterministic_and_bounded():
+    from pathlib import Path
+    import numpy as np
+    try:
+        from ancdata.battlefield import build_battlefield_chain
+        ch = build_battlefield_chain(Path(__file__).resolve().parents[1] / "configs" / "battlefield_v31.yaml", "val")
+    except (FileNotFoundError, RuntimeError, KeyError) as e:
+        import pytest
+        pytest.skip(f"sources absent: {e}")
+    bad = 0
+    for k in range(40):
+        p = ch.plan(k)
+        t = sorted(e["t0_s"] for e in p["bursts"] + p["blasts"])
+        bad += sum(1 for a, b in zip(t, t[1:]) if b - a < 0.4 - 1e-9)
+        assert sum(1 for x in p["texture"] if x.get("hardneg")) <= 1
+    assert bad <= 1                                   # 20 re-draws per impulse; a clash is rare
+    assert np.array_equal(ch.generate(2).noisy, ch.generate(2).noisy)
+    assert "labels" in ch.generate(2).meta

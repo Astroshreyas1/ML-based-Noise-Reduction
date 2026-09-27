@@ -50,7 +50,7 @@ ESC50_POOLS = {"wind", "rain", "helicopter", "engine", "airplane", "chainsaw", "
                "can_opening", "clapping", "glass_breaking", "fireworks"}
 MAD_CLASSES = {0: "communication", 1: "gunshot", 2: "footsteps", 3: "shelling", 4: "vehicle",
                5: "helicopter", 6: "fighter"}
-MAD_MIN_DUR = {"gunshot": 1.0, "footsteps": 0.3, "shelling": 4.0, "vehicle": 5.0, "helicopter": 5.0, "fighter": 5.0}
+MAD_MIN_DUR = {"communication": 1.0, "gunshot": 1.0, "footsteps": 0.3, "shelling": 4.0, "vehicle": 5.0, "helicopter": 5.0, "fighter": 5.0}
 DEMAND_ENVS = ("NFIELD", "NPARK", "NRIVER", "SPSQUARE", "STRAFFIC", "TBUS", "TCAR", "TMETRO")
 DEMAND_SEGMENTS = {"train": (0.0, 210.0), "val": (210.0, 255.0), "test": (255.0, 300.0)}
 FSD_POOLS: dict[str, set[str]] = {          # FSD50K's 200-class vocabulary: no Helicopter / Jet_engine / Machine_gun
@@ -64,14 +64,31 @@ FSD_POOLS: dict[str, set[str]] = {          # FSD50K's 200-class vocabulary: no 
     "fsd_siren": {"Siren"},
     "fsd_thunder": {"Thunder", "Thunderstorm"},
     "fsd_hardneg": {"Slam", "Knock", "Hammer", "Walk_and_footsteps", "Thump_and_thud", "Crack"},
+    # v4 additions (docs/NOISE_LAYERING.md section 8): texture, follow-on and bed variety
+    "fsd_fire": {"Fire", "Crackle"},
+    "fsd_debris": {"Shatter", "Crushing"},
+    "fsd_gear": {"Zipper_(clothing)", "Keys_jangling", "Rattle", "Walk_and_footsteps"},
+    "fsd_fan": {"Mechanical_fan"},
+    "fsd_traffic": {"Traffic_noise_and_roadway_noise"},
+    "fsd_water": {"Stream", "Waves_and_surf", "Ocean"},
+    "fsd_nature": {"Insect", "Cricket", "Bird_vocalization_and_bird_call_and_bird_song", "Chirp_and_tweet", "Crow"},
+    "fsd_fireworks": {"Fireworks"},
 }
+# Interfering talkers (shouts, crowd, chatter): voiced ON PURPOSE, labelled `speech_interferer`,
+# never voice-screened and never a target. Music / singing / screaming tagged clips stay out.
+FSD_INTERFERER = {"fsd_interferer": {"Shout", "Yell", "Crowd", "Chatter", "Conversation"}}
+FSD_INTERFERER_EXCLUDE = {"Music", "Singing", "Male_singing", "Female_singing", "Musical_instrument", "Speech_synthesizer",
+                          "Laughter", "Giggle", "Screaming", "Crying_and_sobbing"}
+INTERFERER_POOLS = {"fsd_interferer", "mad_communication"}
 FSD_VOICE = {"Speech", "Human_voice", "Male_speech_and_man_speaking", "Female_speech_and_woman_speaking",
              "Child_speech_and_kid_speaking", "Conversation", "Shout", "Yell", "Screaming", "Crowd", "Chatter",
              "Cheering", "Singing", "Music", "Laughter", "Human_group_actions", "Whispering",
              "Chewing_and_mastication", "Cough", "Crying_and_sobbing", "Giggle", "Chuckle_and_chortle",
              "Male_singing", "Female_singing", "Applause", "Speech_synthesizer"}
 FSD_MIN_DUR = {"fsd_wind": 3.0, "fsd_rain": 3.0, "fsd_aircraft": 3.0, "fsd_engine": 3.0,
-               "fsd_explosion": 0.3, "fsd_gunshot": 0.3, "fsd_siren": 2.0, "fsd_thunder": 2.0, "fsd_hardneg": 0.2}
+               "fsd_explosion": 0.3, "fsd_gunshot": 0.3, "fsd_siren": 2.0, "fsd_thunder": 2.0, "fsd_hardneg": 0.2,
+               "fsd_fire": 3.0, "fsd_debris": 0.3, "fsd_gear": 0.3, "fsd_fan": 3.0, "fsd_traffic": 4.0, "fsd_water": 4.0,
+               "fsd_nature": 4.0, "fsd_fireworks": 0.3, "fsd_interferer": 1.0}
 US8K_POOLS = {"gun_shot", "engine_idling", "siren", "jackhammer"}
 SCREENED_CORPORA = {"mad", "fsd50k", "urbansound8k"}
 LICENCE = {"esc50": "CC BY-NC 3.0", "mad": "CC BY 4.0", "demand": "CC BY-SA 4.0", "fsd50k": "per-clip CC (FSD50K.metadata)",
@@ -92,6 +109,7 @@ class Row:
     end_s: float
     shot_time: float
     licence: str
+    pp: bool = False          # FSD50K "present and predominant" by every rater (an isolated event)
 
 
 def _h(key: str) -> str:
@@ -131,8 +149,7 @@ def _index_mad() -> list[Row]:
         with (root / csv_name).open(encoding="utf-8") as fh:
             for r in csv.DictReader(fh):
                 cls = MAD_CLASSES[int(r["label"])]
-                if cls == "communication":
-                    continue                       # speech: never a noise source
+                # communication (radio / shouted orders) only ever feeds the `speech_interferer` pool
                 p = root / r["path"]
                 if not p.exists():
                     continue
@@ -162,18 +179,35 @@ def _index_demand() -> list[Row]:
     return rows
 
 
+def _fsd_pp(root: Path) -> dict[str, dict[str, bool]]:
+    """fname -> {class name: True if every rater marked it Present and Predominant}."""
+    f = root / "FSD50K.metadata" / "pp_pnp_ratings_FSD50K.json"
+    voc = root / "FSD50K.ground_truth" / "vocabulary.csv"
+    if not f.exists() or not voc.exists():
+        return {}
+    with voc.open(encoding="utf-8") as fh:
+        mid2name = {r[2]: r[1] for r in csv.reader(fh)}
+    out: dict[str, dict[str, bool]] = {}
+    for fname, ratings in json.loads(f.read_text(encoding="utf-8")).items():
+        out[fname] = {mid2name.get(mid, mid): bool(v) and min(v) >= 1.0 for mid, v in ratings.items()}
+    return out
+
+
 def _index_fsd50k() -> list[Row]:
     root = data_root() / "raw" / "fsd50k"
     if not root.exists():
         return []
     rows = []
+    pp = _fsd_pp(root)
     for csv_name, audio_dir, forced in (("dev.csv", "FSD50K.dev_audio", None), ("eval.csv", "FSD50K.eval_audio", "test")):
         with (root / "FSD50K.ground_truth" / csv_name).open(encoding="utf-8") as fh:
             for r in csv.DictReader(fh):
                 labels = set(r["labels"].split(","))
                 if labels & FSD_VOICE:
-                    continue
-                pools = [name for name, classes in FSD_POOLS.items() if labels & classes]
+                    pools = [name for name, classes in FSD_INTERFERER.items()
+                             if labels & classes and not labels & FSD_INTERFERER_EXCLUDE]
+                else:
+                    pools = [name for name, classes in FSD_POOLS.items() if labels & classes]
                 if not pools:
                     continue
                 p = root / audio_dir / f"{r['fname']}.wav"
@@ -184,8 +218,9 @@ def _index_fsd50k() -> list[Row]:
                 for pool in pools:
                     if d < FSD_MIN_DUR[pool]:
                         continue
+                    classes = (FSD_POOLS.get(pool) or FSD_INTERFERER[pool]) & labels
                     rows.append(Row(to_relative(p), pool, "fsd50k", pool[4:], d, sr, split, r["fname"], 0.0, d, -1.0,
-                                    LICENCE["fsd50k"]))
+                                    LICENCE["fsd50k"], all(pp.get(r["fname"], {}).get(c, False) for c in classes)))
     return rows
 
 
@@ -297,13 +332,34 @@ def build_pools(screen: bool | str = True, workers: int = 4, verbose: bool = Tru
     df = pd.DataFrame([r.__dict__ for r in rows])
     df["has_voice"] = False
     flag_file = data_root() / "pools_voice_flagged.txt"
-    if screen == "cached" and flag_file.exists():
+    if screen == "incremental" and flag_file.exists() and pools_path().exists():
+        # reuse the old verdicts; screen only the paths the previous index never screened
+        old = pd.read_parquet(pools_path(), columns=["path", "corpus", "pool"])
+        done = set(old.loc[old.corpus.isin(SCREENED_CORPORA) & ~old.pool.isin(INTERFERER_POOLS), "path"])
         flagged = {ln.strip() for ln in flag_file.read_text(encoding="utf-8").splitlines() if ln.strip()}
-        df["has_voice"] = df.path.isin(flagged)
+        todo = sorted(set(df.loc[df.corpus.isin(SCREENED_CORPORA) & ~df.pool.isin(INTERFERER_POOLS), "path"]) - done)
+        if workers > 1 and todo:
+            from concurrent.futures import ProcessPoolExecutor
+            with ProcessPoolExecutor(workers) as ex:
+                for rel, v in tqdm(ex.map(_screen_one, todo, chunksize=16), total=len(todo), desc="voice screen (new)",
+                                   disable=not verbose):
+                    if v:
+                        flagged.add(rel)
+        else:
+            for rel in tqdm(todo, desc="voice screen (new)", disable=not verbose):
+                if _screen_one(rel)[1]:
+                    flagged.add(rel)
+        df["has_voice"] = df.path.isin(flagged) & ~df.pool.isin(INTERFERER_POOLS)
+        flag_file.write_text("\n".join(sorted(flagged)) + "\n", encoding="utf-8")
+        if verbose:
+            print(f"voice screen: {len(todo)} new files screened, {len(flagged)} flagged in total")
+    elif screen == "cached" and flag_file.exists():
+        flagged = {ln.strip() for ln in flag_file.read_text(encoding="utf-8").splitlines() if ln.strip()}
+        df["has_voice"] = df.path.isin(flagged) & ~df.pool.isin(INTERFERER_POOLS)
         if verbose:
             print(f"voice screen: reused {len(flagged)} flagged paths from {flag_file}")
     elif screen:
-        todo = sorted(set(df.loc[df.corpus.isin(SCREENED_CORPORA), "path"]))
+        todo = sorted(set(df.loc[df.corpus.isin(SCREENED_CORPORA) & ~df.pool.isin(INTERFERER_POOLS), "path"]))
         flagged: set[str] = set()
         if workers > 1:
             from concurrent.futures import ProcessPoolExecutor
@@ -316,7 +372,7 @@ def build_pools(screen: bool | str = True, workers: int = 4, verbose: bool = Tru
             for rel in tqdm(todo, desc="voice screen", disable=not verbose):
                 if _screen_one(rel)[1]:
                     flagged.add(rel)
-        df["has_voice"] = df.path.isin(flagged)
+        df["has_voice"] = df.path.isin(flagged) & ~df.pool.isin(INTERFERER_POOLS)
         (data_root() / "pools_voice_flagged.txt").write_text("\n".join(sorted(flagged)) + "\n", encoding="utf-8")
         if verbose:
             print(f"voice screen: {len(flagged)} / {len(todo)} files flagged -> data/pools_voice_flagged.txt")
@@ -358,14 +414,20 @@ class Pools:
     worker never grows past `cache_mb` (DEMAND is read by segment, not whole)."""
 
     def __init__(self, split: str, path: Path | None = None, cache_mb: float = 512.0, sr: int = SR,
-                 allow_voice: bool = False):
+                 allow_voice: bool = False, require_audit: bool = False):
         df = load_pools(path)
         if not allow_voice:
             df = df[~df.has_voice]
+        if require_audit:                        # ancdata/pool_audit.py: tagger-confirmed content; untagged pools pass
+            aud = pd.read_parquet(data_root() / "pools_audit.parquet", columns=["path", "pool", "start_s", "end_s", "audit_ok"])
+            df = df.merge(aud, on=["path", "pool", "start_s", "end_s"], how="left")
+            df = df[df.audit_ok.isna() | (df.audit_ok == True)].drop(columns="audit_ok")  # noqa: E712
         self.df = df[split_mask(df.split, split)].reset_index(drop=True)
         self.split = split
         self.sr = sr
         self.by_pool: dict[str, np.ndarray] = {p: g.index.to_numpy() for p, g in self.df.groupby("pool")}
+        pp = self.df["pp"].fillna(False).astype(bool) if "pp" in self.df else pd.Series(False, index=self.df.index)
+        self.by_pool_pp: dict[str, np.ndarray] = {p: g.index[pp[g.index]].to_numpy() for p, g in self.df.groupby("pool")}
         self.cache_bytes = int(cache_mb * 1024 * 1024)
         self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
         self._used = 0
@@ -376,8 +438,12 @@ class Pools:
     def n(self, pool: str) -> int:
         return len(self.by_pool.get(pool, ()))
 
-    def draw(self, pool: str, rng: np.random.Generator) -> pd.Series:
+    def draw(self, pool: str, rng: np.random.Generator, pp_only: bool = False) -> pd.Series:
+        """pp_only: FSD50K clips every rater marked Present-and-Predominant (isolated events);
+        falls back to the whole pool when fewer than 20 such clips exist in the split."""
         idx = self.by_pool.get(pool)
+        if pp_only and len(self.by_pool_pp.get(pool, ())) >= 20:
+            idx = self.by_pool_pp[pool]
         if idx is None or len(idx) == 0:
             raise KeyError(f"pool {pool!r} has no files in split {self.split!r}")
         return self.df.iloc[int(rng.choice(idx))]

@@ -34,11 +34,22 @@ def lowpass1(x: np.ndarray, fc: float, sr: int = SR) -> np.ndarray:
     return lfilter([1 - k], [1, -k], x).astype(np.float32)
 
 
-def outdoor_tail(x: np.ndarray, tau_s: float, level_db: float, rng: np.random.Generator, sr: int = SR) -> np.ndarray:
+def outdoor_tail(x: np.ndarray, tau_s: float, level_db: float, rng: np.random.Generator, sr: int = SR,
+                 banded: bool = False) -> np.ndarray:
+    """banded (v3.1): three bands with their own decay -- slowest 150 Hz-4 kHz, x0.7 below,
+    x0.5 above (Traer & McDermott 2016: real outdoor reverb is never frequency-flat)."""
     n = int(3 * tau_s * sr)
     t = np.arange(n) / sr
-    tail = rng.standard_normal(n).astype(np.float32) * np.exp(-t / tau_s)
-    tail = lowpass1(tail, 2500.0, sr)
+    if banded:
+        from scipy.signal import butter, sosfilt
+        tail = np.zeros(n, dtype=np.float32)
+        for kind, fc, mult in (("lp", 150.0, 0.7), ("bp", (150.0, 4000.0), 1.0), ("hp", 4000.0, 0.5)):
+            w = sosfilt(butter(2, fc, kind, fs=sr, output="sos"), rng.standard_normal(n))
+            tail += (w * np.exp(-t / (tau_s * mult))).astype(np.float32)
+        tail = lowpass1(tail, 5000.0, sr)
+    else:
+        tail = rng.standard_normal(n).astype(np.float32) * np.exp(-t / tau_s)
+        tail = lowpass1(tail, 2500.0, sr)
     tail *= 10 ** (level_db / 20) / (np.abs(tail).max() + EPS)
     ir = np.zeros(n + 1, dtype=np.float32)
     ir[0] = 1.0
@@ -64,7 +75,8 @@ def render_burst(b: dict[str, Any], rng: np.random.Generator, sr: int = SR) -> t
     waveform, physics params if any)."""
     params: dict[str, float] = {}
     if b["source"] == "physics":
-        spec = dict(standoff_m={"dist": "loguniform", "low": 40.0, "high": 400.0} if b.get("distant") else
+        spec = dict(standoff_m={"dist": "uniform", "low": b["standoff_m"], "high": b["standoff_m"]} if "standoff_m" in b else
+                    {"dist": "loguniform", "low": 40.0, "high": 400.0} if b.get("distant") else
                     {"dist": "loguniform", "low": 5.0, "high": 80.0},
                     T_ms={"dist": "uniform", "low": 0.4, "high": 2.0},
                     burst={"dist": "uniform_int", "low": b["n_rounds"], "high": b["n_rounds"]},
@@ -87,7 +99,8 @@ def render_burst(b: dict[str, Any], rng: np.random.Generator, sr: int = SR) -> t
             wave[s0: s0 + len(one)] += one * float(rng.uniform(0.7, 1.0))
     if b.get("distant"):
         wave = lowpass1(lowpass1(wave, 1800.0, sr), 1800.0, sr)
-    wave = outdoor_tail(wave, b["tail_tau_s"], b["tail_db"], rng, sr)
+    if b.get("tail_tau_s") is not None:           # v3; v4 passes no tail and convolves with the scene IR
+        wave = outdoor_tail(wave, b["tail_tau_s"], b["tail_db"], rng, sr, banded=bool(b.get("banded")))
     return wave / (np.abs(wave).max() + EPS), params
 
 
@@ -96,9 +109,13 @@ def render_blast(bl: dict[str, Any], rng: np.random.Generator, sr: int = SR) -> 
     long tail, or a MAD shelling clip cropped at its loudest point."""
     params: dict[str, float] = {}
     if bl["source"] == "physics":
-        wave, params = synth_blast(rng, dict(standoff_m={"dist": "loguniform", "low": 100.0, "high": 600.0},
-                                             T_ms={"dist": "uniform", "low": 2.5, "high": 4.0}, supersonic_p=0.0), sr)
-        wave = outdoor_tail(wave, float(rng.uniform(0.3, 0.7)), -float(rng.uniform(4, 10)), rng, sr)
+        so = ({"dist": "uniform", "low": bl["standoff_m"], "high": bl["standoff_m"]} if "standoff_m" in bl
+              else {"dist": "loguniform", "low": 100.0, "high": 600.0})
+        wave, params = synth_blast(rng, dict(standoff_m=so, T_ms={"dist": "uniform", "low": 2.5, "high": 4.0},
+                                             supersonic_p=0.0), sr)
+        if bl.get("tail", True):
+            wave = outdoor_tail(wave, float(rng.uniform(0.3, 0.7)) * float(bl.get("tau_scale", 1.0)),
+                                -float(rng.uniform(4, 10)), rng, sr, banded=bool(bl.get("banded")))
     else:
         x = trim_silence(load_mono(bl["file"], sr))
         pk = int(np.argmax(np.abs(x)))

@@ -56,7 +56,10 @@ def test_all_shipped_configs_load():
     from ancdata.battlefield import load_battlefield_config
     from ancdata.config import load_config
     for f in Path(__file__).resolve().parent.parent.joinpath("configs").glob("*.yaml"):
-        if f.stem.startswith("battlefield"):
+        if f.stem == "battlefield_v4":
+            from ancdata.battlefield_v4 import load_v4_config
+            load_v4_config(f)                   # v4 chain: label catalogue + budget schema
+        elif f.stem.startswith("battlefield"):
             load_battlefield_config(f)          # v3 chain: its own schema (6 s, dry_x_agc target)
         else:
             load_config(f)

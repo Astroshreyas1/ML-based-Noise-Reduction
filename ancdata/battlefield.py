@@ -43,6 +43,45 @@ from .scene import ENVELOPE_PRIORS, apply_envelope
 from .snippets import load_snippets
 from .transients import audible_span, lowpass1, render_blast, render_burst
 
+# clip-level scene labels (v3.1 meta): pool -> label, first matching key wins
+POOL_LABEL_EXACT = {"esc50_train": "vehicle_heavy", "esc50_sea_waves": "ambience_rural", "esc50_crackling_fire": "fire_crackle",
+                    "esc50_car_horn": "vehicle_light", "esc50_glass_breaking": "debris_impact", "fsd_debris": "debris_impact",
+                    "esc50_fireworks": "hard_negative", "fsd_fireworks": "hard_negative", "fsd_fire": "fire_crackle",
+                    "fsd_nature": "ambience_rural", "fsd_water": "ambience_rural", "fsd_traffic": "ambience_urban",
+                    "fsd_fan": "engine_machinery", "fsd_gear": "footsteps_gear", "demand_tbus": "vehicle_interior",
+                    "fsd_interferer": "speech_interferer", "mad_communication": "speech_interferer"}
+POOL_LABELS = (("helicopter", "helicopter"), ("fighter", "jet_aircraft"), ("aircraft", "jet_aircraft"),
+               ("airplane", "jet_aircraft"), ("drone", "drone_uav"), ("siren", "siren_alarm"), ("thunder", "thunder"),
+               ("rain", "rain"), ("wind", "wind_ambient"), ("shelling", "blast_distant"), ("explosion", "blast_distant"),
+               ("chainsaw", "engine_machinery"), ("jackhammer", "engine_machinery"), ("engine", "engine_machinery"),
+               ("idling", "engine_machinery"), ("truck", "vehicle_heavy"), ("bus", "vehicle_heavy"),
+               ("mad_vehicle", "vehicle_heavy"), ("idmt_car", "vehicle_light"), ("motorcycle", "vehicle_light"),
+               ("tcar", "vehicle_interior"), ("tmetro", "vehicle_interior"), ("nfield", "ambience_rural"),
+               ("npark", "ambience_rural"), ("nriver", "ambience_rural"), ("straffic", "ambience_urban"),
+               ("spsquare", "ambience_urban"), ("footsteps", "footsteps_gear"), ("gear", "footsteps_gear"))
+
+
+def audible_fraction(sig: np.ndarray, rest: np.ndarray, sr: int = SR, frame_s: float = 0.05, within_db: float = -10.0) -> float:
+    """Fraction of 50 ms frames (where sig is active) in which sig is within `within_db` of everything
+    else. Energy over the whole clip would let one gunshot 'mask' a helicopter that is plainly audible."""
+    m = int(frame_s * sr)
+    k = len(sig) // m
+    es = np.sum(sig[: k * m].reshape(k, m) ** 2, axis=1)
+    er = np.sum(rest[: k * m].reshape(k, m) ** 2, axis=1)
+    act = es > es.max() * 1e-4 if es.max() > 0 else np.zeros(k, bool)
+    if not act.any():
+        return 0.0
+    return float(np.mean(10 * np.log10((es[act] + EPS) / (er[act] + EPS)) >= within_db))
+
+
+def pool_label(pool: str) -> str:
+    if pool in POOL_LABEL_EXACT:
+        return POOL_LABEL_EXACT[pool]
+    for key, lab in POOL_LABELS:
+        if key in pool:
+            return lab
+    return "hard_negative"
+
 REQUIRED = ("name", "seed", "sample_rate", "segment_seconds", "channels", "target", "speech", "mix", "gunfire",
             "blasts", "wind", "channel", "ref", "scenarios", "pools", "build")
 
@@ -123,14 +162,49 @@ class BattlefieldChain:
         df = df[split_mask(df.split, split)].sort_values("id").reset_index(drop=True)
         if len(df) == 0:
             raise RuntimeError(f"no Lombard snippets for split {split!r} under {root}")
+        df = df.assign(root=cfg["speech"]["snippets"])
+        extra = cfg["speech"].get("extra_sets") or []
+        if extra:                                  # v3.1: radio-procedure speech mixed in at fixed corpus shares
+            df = self._mix_extra(df, extra, split, int(cfg["seed"]))
         # fixed seeded permutation: any contiguous index range mixes corpora, speakers and efforts
         perm = np.random.default_rng([int(cfg["seed"]), 7]).permutation(len(df))
         self.snippets = df.iloc[perm].reset_index(drop=True)
         self.pools = pools or Pools(split, cache_mb=float(cfg["pools"].get("cache_mb", 512)),
-                                    allow_voice=bool(cfg["pools"].get("allow_voice", False)))
+                                    allow_voice=bool(cfg["pools"].get("allow_voice", False)),
+                                    require_audit=bool(cfg["pools"].get("require_audit", False)))
         w = np.array([float(s.get("weight", 1.0)) for s in cfg["scenarios"]])
         self._scn_p = w / w.sum()
         self._pool_ok = {p: self.pools.n(p) > 0 for p in self.pools.pools()}
+
+    @staticmethod
+    def _mix_extra(base: pd.DataFrame, extra: list[dict[str, Any]], split: str, seed: int) -> pd.DataFrame:
+        """Each extra corpus gets `share` of the final snippet list (base keeps the rest). A corpus with
+        fewer snippets than its quota is re-used (different scenes per use); one with more is subsampled."""
+        from .pools import split_mask
+        shares = {c: float(s) for e in extra for c, s in e["share"].items()}
+        base_share = 1.0 - sum(shares.values())
+        frames = [base]
+        for i, e in enumerate(extra):
+            root = data_root() / e["root"]
+            if not (root / "meta.parquet").exists():
+                continue
+            d = pd.read_parquet(root / "meta.parquet")
+            d = d[split_mask(d.split, split)].assign(root=e["root"]).sort_values("id").reset_index(drop=True)
+            for c, s in e["share"].items():
+                dc = d[d.corpus == c]
+                if len(dc) == 0:
+                    continue
+                want = int(round(len(base) * s / base_share))
+                r = np.random.default_rng([seed, 11, i, sum(map(ord, c))])
+                idx = r.choice(len(dc), size=want, replace=want > len(dc))
+                frames.append(dc.iloc[np.sort(idx)])
+        cols = list(base.columns)
+        out = pd.concat([f.reindex(columns=cols) for f in frames], ignore_index=True)
+        out["id"] = out["id"].astype(str)
+        # repeated snippets need distinct sort keys so the permutation stays deterministic
+        out["_k"] = out.groupby("id").cumcount()
+        out = out.sort_values(["id", "_k"]).drop(columns="_k").reset_index(drop=True)
+        return out
 
     # ---- sizes ---------------------------------------------------------------
     @property
@@ -171,7 +245,8 @@ class BattlefieldChain:
         seg = float(cfg["segment_seconds"])
         plan: dict[str, Any] = {
             "index": int(index), "seed": int(cfg["seed"]), "split": self.split, "scenario": scn["name"],
-            "snippet": {"id": snip.id, "path": snip.path, "corpus": snip.corpus, "speaker_id": snip.speaker_id,
+            "snippet": {"id": snip.id, "path": snip.path, "root": str(getattr(snip, "root", cfg["speech"]["snippets"])),
+                        "corpus": snip.corpus, "speaker_id": snip.speaker_id,
                         "effort": snip.effort, "gender": snip.gender, "transcript": snip.transcript,
                         "speech_fraction": float(snip.speech_fraction)},
             "speech_level_db": sample(cfg["speech"]["level_db"], rng),
@@ -256,17 +331,102 @@ class BattlefieldChain:
                 if src == "mad":
                     d.update(self._draw_file(self._pick_pool(["mad_shelling"], rng), rng))
                 plan["blasts"].append(d)
+        if cfg.get("logic"):
+            self._logic_pass(plan, scn, index)
         # electronics
         r = cfg["ref"]
         plan["ref"] = {"speech_db": sample(r["speech_db"], rng), "noise_db": sample(r["noise_db"], rng)}
         plan["boom_seed"] = int(rng.integers(2 ** 31))
         plan["ref_seed"] = int(rng.integers(2 ** 31))
+        if cfg.get("radio"):                    # own stream: v3 / v3.1 draws above are untouched
+            rr = np.random.default_rng([int(cfg["seed"]), int(index), 53])
+            plan["radio"] = {"on": bool(rr.random() < float(cfg["radio"].get("p", 0.0))), "seed": int(rr.integers(2 ** 31))}
         return plan
+
+    # ---- v3.1 layering logic ---------------------------------------------------
+    def _extra_pieces(self, L: dict[str, Any], rng: np.random.Generator, seg: float) -> None:
+        total = L["end_s"] - L["start_s"]
+        extra: list[dict[str, Any]] = []
+        while total < seg + 1.0 and len(extra) < 6:
+            e = self._draw_file(L["pool"], rng)
+            extra.append({k: e[k] for k in ("path", "start_s", "end_s", "duration_s")})
+            total += e["end_s"] - e["start_s"] - 0.6
+        if extra:
+            L["extra"] = extra
+
+    def _logic_pass(self, plan: dict[str, Any], scn: dict[str, Any], index: int) -> None:
+        """v3.1: same scene recipe and density as v3 (the sound the listening trials chose);
+        fixes the *logic* of how layers are cut, timed and levelled. Own RNG stream, so the
+        v3 draws before it are untouched."""
+        lg = self.cfg["logic"]
+        rng = np.random.default_rng([int(self.cfg["seed"]), int(index), 31])
+        seg = float(self.cfg["segment_seconds"])
+        # 1. no loops: short beds / events / wind get extra distinct segments; bed 2 is a different file
+        b2 = plan["bed2"]
+        for _ in range(5):
+            if b2["path"] != plan["layers"][0]["path"]:
+                break
+            b2.update(self._draw_file(b2["pool"], rng))
+        for L in plan["layers"] + [b2] + ([plan["wind"]] if plan["wind"] else []):
+            if L.get("kind") != "real_passby":
+                self._extra_pieces(L, rng, seg)
+        # 2. foreground events are foreground: a pass-by / approach is not 2-12 dB under the bed
+        lo, hi = lg["foreground_event_db"]
+        for L in plan["layers"][1:]:
+            if L.get("kind") in ("passby", "approach", "real_passby"):
+                L["rel_db"] = float(rng.uniform(lo, hi))
+        # 3. impulses keep a minimum onset gap (two bursts never start on top of each other)
+        imps = plan["bursts"] + plan["blasts"]
+        gap = float(lg["impulse_gap_s"])
+        placed: list[float] = []
+        for ev in imps:
+            for _ in range(20):
+                if all(abs(ev["t0_s"] - t) >= gap for t in placed):
+                    break
+                ev["t0_s"] = float(rng.uniform(0.2, seg - 1.2))
+            placed.append(ev["t0_s"])
+        # 4. one outdoor "space" per clip: every tail shares a decay scale and is frequency-dependent
+        tau = float(rng.uniform(*lg["tail_tau_scale"]))
+        plan["space"] = {"tau_scale": tau, "banded": True}
+        for b in plan["bursts"]:
+            b["tail_tau_s"] *= tau
+            b["banded"] = True
+        for d in plan["blasts"]:
+            d["tau_scale"], d["banded"] = tau, True
+        # 5. textures: onset-aligned (render), not in the 0.4 s after a shot / blast, >= 0.15 s apart,
+        #    and at most one hard negative per clip
+        hn = lg["hardneg"]
+        if rng.random() < float(hn["p"]):
+            pool = self._pick_pool(hn["pools"], rng)
+            plan["texture"].append({**self._draw_file(pool, rng), "offset": int(rng.integers(0, 10 ** 7)),
+                                    "dur_s": float(rng.uniform(0.2, 0.8)), "t0_s": 0.0,
+                                    "rel_db": float(rng.uniform(*hn["rel_db"])), "hardneg": True})
+        quiet = [(t, t + float(lg["quiet_after_impulse_s"])) for t in placed]
+        done: list[float] = []
+        for tx in plan["texture"]:
+            t0 = float(rng.uniform(0.0, seg - 0.3)) if tx.get("hardneg") else float(tx["t0_s"])
+            for _ in range(30):
+                if all(not (a <= t0 <= b) for a, b in quiet) and all(abs(t0 - d) >= float(lg["texture_gap_s"]) for d in done):
+                    break
+                t0 = float(rng.uniform(0.0, seg - 0.3))
+            tx["t0_s"] = t0
+            done.append(t0)
+        # 6. buffets are wind on the capsule: none in a vehicle, at most `buffets_without_wind` handling bumps
+        if float(scn.get("wind_p", 0.0)) == 0.0:
+            plan["buffets"] = []
+        elif not plan["wind"]:
+            plan["buffets"] = plan["buffets"][: int(lg["buffets_without_wind"])]
+        # 7. inside a vehicle, outside sound comes through the hull
+        plan["interior"] = scn["name"] in lg["interior_scenarios"]
 
     # ---- render --------------------------------------------------------------
     def _layer_audio(self, L: dict[str, Any], offset_key: str = "offset") -> np.ndarray:
         x = self.pools.load(L)
         n = self.n
+        if L.get("extra"):                      # v3.1: distinct segments crossfaded, never a tiled loop
+            from .acoustics import concat_crossfade
+            pieces = [x] + [self.pools.load(e) for e in L["extra"]]
+            x = concat_crossfade(pieces, sum(len(q) for q in pieces) - int(0.6 * self.sr) * (len(pieces) - 1), 0.6, self.sr)
         if L.get("kind") == "real_passby":
             seg = _fade(x[:n].copy(), int(0.05 * self.sr))
             out = np.zeros(n, dtype=np.float32)
@@ -289,19 +449,36 @@ class BattlefieldChain:
         cfg, n, sr = self.cfg, self.n, self.sr
         # 1. speech
         from .audio import load_mono
-        sp = speech if speech is not None else load_mono(data_root() / cfg["speech"]["snippets"] / plan["snippet"]["path"], sr)
+        sp = speech if speech is not None else load_mono(
+            data_root() / plan["snippet"].get("root", cfg["speech"]["snippets"]) / plan["snippet"]["path"], sr)
         sp = sp[:n] if len(sp) >= n else np.pad(sp, (0, n - len(sp)))
         s = (sp * db_to_lin(plan["speech_level_db"] - active_rms_db(sp))).astype(np.float32)
         # 2-3. scene
         scene = np.zeros(n, dtype=np.float32)
-        for L in plan["layers"]:
-            scene += self._layer_audio(L) * db_to_lin(L["rel_db"])
+        interior = bool(plan.get("interior"))
+        from .acoustics import expander, hull_transmission, onset_crop
+        layer_sigs: list[tuple[str, np.ndarray]] = []           # (label, signal before the SNR gain)
+        for i, L in enumerate(plan["layers"]):
+            y = self._layer_audio(L)
+            if interior and i > 0:
+                y = hull_transmission(y, sr)
+                y = y / (db_to_lin(active_rms_db(y)) + EPS)
+            scene += y * db_to_lin(L["rel_db"])
+            layer_sigs.append((pool_label(L["pool"]), y * db_to_lin(L["rel_db"])))
         b2 = plan["bed2"]
-        scene += self._layer_audio(b2) * db_to_lin(b2["rel_db"])
+        y = self._layer_audio(b2) * db_to_lin(b2["rel_db"])
+        scene += y
+        layer_sigs.append((pool_label(b2["pool"]), y))
         for tx in plan["texture"]:
             x = self.pools.load(tx)
-            seg = _fade(_crop_at(x, int(tx["dur_s"] * sr), tx["offset"]).copy(), int(0.02 * sr))
-            _place(scene, _unit(seg) * db_to_lin(tx["rel_db"]), int(tx["t0_s"] * sr))
+            if cfg.get("logic"):                 # v3.1: start at a real onset, natural decay, own room tone removed
+                seg = expander(onset_crop(x, tx["dur_s"], sr, search_from=int(tx["offset"]) % max(1, len(x) - sr // 5)), sr)
+            else:
+                seg = _fade(_crop_at(x, int(tx["dur_s"] * sr), tx["offset"]).copy(), int(0.02 * sr))
+            tx_sig = np.zeros(n, dtype=np.float32)
+            _place(tx_sig, _unit(seg) * db_to_lin(tx["rel_db"]), int(tx["t0_s"] * sr))
+            scene += tx_sig
+            tx["_sig"] = tx_sig
         buf = np.zeros(n, dtype=np.float32)
         for bf in plan["buffets"]:
             r = np.random.default_rng(bf["seed"])
@@ -332,6 +509,8 @@ class BattlefieldChain:
             elif b["source"] == "mad":
                 spec["file"] = str(data_root() / b["path"])
             w, params = render_burst(spec, np.random.default_rng(b["seed"]), sr)
+            if interior:
+                w = hull_transmission(w, sr)
             t0 = int(b["t0_s"] * sr)
             ev = w * sp_peak * db_to_lin(b["ratio_db"])
             _place(imp, ev, t0)
@@ -345,23 +524,48 @@ class BattlefieldChain:
             if d["source"] == "mad":
                 spec["file"] = str(data_root() / d["path"])
             w, params = render_blast(spec, np.random.default_rng(d["seed"]), sr)
+            if interior:
+                w = hull_transmission(w, sr)
             t0 = int(d["t0_s"] * sr)
             ev = w * sp_peak * db_to_lin(d["ratio_db"])
             _place(imp, ev, t0)
             a, e = audible_span(ev[: n - t0], t0)
             events.append(Event(a, e, "blast", float(d["ratio_db"]), 0.0,
                                 {"source": d["source"], **{k: float(v) for k, v in params.items()}}))
-        for tx in plan["texture"]:
+        for i_tx, tx in enumerate(plan["texture"]):
             a = int(tx["t0_s"] * sr)
             e = min(n, a + int(tx["dur_s"] * sr))
             if e > a:
-                events.append(Event(a, e, "hard_negative", float(tx["rel_db"]), 0.0, {"pool": tx["pool"]}))
+                cat = "hard_negative" if not cfg.get("logic") or tx.get("hardneg") else pool_label(tx["pool"])
+                if cat not in ("hard_negative", "footsteps_gear"):
+                    cat = "hard_negative"
+                events.append(Event(a, e, cat, float(tx["rel_db"]), 0.0, {"pool": tx["pool"], "tx_i": float(i_tx)}))
         noise_total = noise_boom + imp
         for ev in events:
             ev.local_snr_db = _local_snr_db(s, noise_total, ev.start, ev.end)
+        if cfg.get("logic"):                        # audibility: an event > 20 dB under the rest of the mix is `masked`
+            total = s + noise_total
+            for ev in events:
+                if "tx_i" in ev.params:
+                    sig = plan["texture"][int(ev.params["tx_i"])]["_sig"] * g
+                else:                                    # transient: the impulse track (overlaps are rare)
+                    sig = imp
+                a, e = ev.start, ev.end
+                frac = audible_fraction(sig[a:e], total[a:e] - sig[a:e], sr)
+                ev.params["audible_frac"] = frac
+                ev.params["masked"] = bool(frac < float(cfg["logic"].get("audible_frac", 0.15)))
+            for tx in plan["texture"]:
+                tx.pop("_sig", None)
         # 6-7. boom channel; target = dry speech x AGC gain
         boom, gain, st = capsule_channel(s + noise_total, np.random.default_rng(plan["boom_seed"]), cfg["channel"], sr)
         clean = (s * gain).astype(np.float32)
+        radio_info = None
+        if plan.get("radio", {}).get("on"):     # tactical radio link on the input; target = link's linear filters only
+            from .radio import radio_link
+            rp_ = {k: v for k, v in cfg["radio"].items() if k != "p"}
+            boom, clean, rmask, radio_info = radio_link(boom, clean, np.random.default_rng(plan["radio"]["seed"]), rp_)
+            muted = np.where(rmask == 0)[0]
+            radio_info["mute_span"] = [int(muted[0]), int(muted[-1]) + 1] if len(muted) else None
         # 8. reference mic
         rp = plan["ref"]
         ref_in = s * db_to_lin(rp["speech_db"]) + (noise_ref + imp) * db_to_lin(rp["noise_db"])
@@ -379,7 +583,24 @@ class BattlefieldChain:
             "n_blasts": len(plan["blasts"]),
             "agc_min_gain_db": st["agc_min_gain_db"], "clip_pct": st["clip_pct"],
             "ref_speech_db": rp["speech_db"], "ref_noise_db": rp["noise_db"], "ref_clip_pct": st_ref["clip_pct"],
+            "radio": radio_info,
         }
+        if cfg.get("logic"):
+            total = s + noise_total
+            labs = set()
+            layer_frac = {}
+            for lab, sig in layer_sigs:                  # a layer counts if audible in >= 15 % of its active frames
+                frac = audible_fraction(sig * g, total - sig * g, sr)
+                layer_frac[lab] = max(layer_frac.get(lab, 0.0), frac)
+                if frac >= float(cfg["logic"].get("audible_frac", 0.15)):
+                    labs.add(lab)
+            labs |= {ev.category for ev in events if not ev.params.get("masked")}
+            meta["layer_audible_frac"] = layer_frac
+            if plan["wind"]:
+                labs.add("wind_mic")
+            meta["labels"] = sorted(labs)
+            meta["interior"] = interior
+            meta["tail_tau_scale"] = plan["space"]["tau_scale"]
         if cfg.get("debug_stems"):
             meta["_stems"] = {"speech_dry": s, "scene": noise_boom, "transients": imp, "agc_gain": gain}
         pair = Pair(np.stack([boom, ref]).astype(np.float32), clean, events, meta)

@@ -47,6 +47,7 @@ def main(argv=None) -> None:
     p = sub.add_parser("pools", help="index the raw noise corpora into split pools -> data/pools.parquet (voice screen on)")
     p.add_argument("--no-screen", action="store_true", help="skip the voice screen (MAD / FSD50K / UrbanSound8K)")
     p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--incremental", action="store_true", help="reuse old voice-screen verdicts; screen only new files")
 
     p = sub.add_parser("battlefield", help="build a split of the battlefield v3 dataset (memory-aware workers)")
     p.add_argument("--config", type=Path, default=Path("configs/battlefield.yaml"))
@@ -70,6 +71,17 @@ def main(argv=None) -> None:
     p.add_argument("--n", type=int, default=10)
     p.add_argument("--start", type=int, default=0)
     p.add_argument("--out", type=Path, default=Path("outputs/battlefield_listen"))
+
+    p = sub.add_parser("radio-snippets", help="radio-procedure speech (ATCOSIM, Speech Commands, TTS) -> data/snippets/radio6s")
+    p = sub.add_parser("snippet-words", help="faster-whisper word timings + keyword flags -> <set>/words.parquet")
+    p.add_argument("--set", default="radio6s")
+
+    p = sub.add_parser("battlefield-compare", help="v3 vs v4 listening sheet, one row per scenario, same speech")
+    p.add_argument("--v4", type=Path, default=Path("configs/battlefield_v4.yaml"))
+    p.add_argument("--v3", type=Path, default=Path("configs/battlefield.yaml"))
+    p.add_argument("--split", default="train")
+    p.add_argument("--per-scenario", type=int, default=1)
+    p.add_argument("--out", type=Path, default=Path("outputs/battlefield_v4_listen"))
 
     p = sub.add_parser("battlefield-selftest", help="contract, determinism, leakage, SNR bookkeeping, gunfire rate")
     p.add_argument("--config", type=Path, default=Path("configs/battlefield.yaml"))
@@ -157,7 +169,7 @@ def main(argv=None) -> None:
         print(f"-> {out}")
     elif a.cmd == "pools":
         from .pools import build_pools
-        build_pools(screen=not a.no_screen, workers=a.workers)
+        build_pools(screen="incremental" if a.incremental else not a.no_screen, workers=a.workers)
     elif a.cmd == "battlefield":
         from .battlefield import load_battlefield_config
         from .build import build_split, dataset_root, write_report
@@ -171,6 +183,16 @@ def main(argv=None) -> None:
         from .build import dataset_root, write_report
         cfg = load_battlefield_config(a.config)
         write_report(a.root or dataset_root(cfg), baseline=not a.no_baseline)
+    elif a.cmd == "radio-snippets":
+        from .speech_extra import build_radio_snippets
+        build_radio_snippets()
+    elif a.cmd == "snippet-words":
+        from .paths import data_root
+        from .speech_extra import snippet_words
+        snippet_words(data_root() / "snippets" / a.set)
+    elif a.cmd == "battlefield-compare":
+        from .listen_v4 import compare_sheet
+        print(compare_sheet(a.v4, a.v3, a.split, a.out, a.per_scenario))
     elif a.cmd == "battlefield-listen":
         from .listen import listen_sheet
         print(listen_sheet(a.config, a.split, a.n, a.out, start=a.start))

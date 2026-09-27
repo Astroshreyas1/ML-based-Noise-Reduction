@@ -34,3 +34,10 @@ model/runs/**/*.log
 model/runs/**/*.err
 .claude/
 .env
+
+# shipping bundles / zips
+ship/*.zip
+ship/**/runs/
+docs/
+!docs/LIT_REVIEW.md
+model/runs_*.log

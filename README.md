@@ -87,3 +87,22 @@ data/         ANC_DATA_ROOT (git-ignored): sources/, manifest.parquet, eval/
 ## Licences of the sources
 
 Lombard GRID CC BY 4.0 · AVID CC BY 4.0 · LibriSpeech CC BY 4.0 · ESC-50 CC BY-NC 3.0 and UrbanSound8K CC BY-NC 4.0 (prototype only — replace for a product) · MAD CC BY 4.0 · FSD50K per-clip CC (metadata) · DEMAND CC BY-SA 4.0 · IDMT-Traffic CC BY 4.0 · Zenodo gunshot range set (see record) · DroneAudioDataset research · in-house recordings: signed consent forms. The registry / pools store the licence per file.
+
+## Radio hub pipeline (v3.1, 2026-09-27)
+
+The model is deployed at a hub that receives tactical radio chatter and cleans it for the officer in charge.
+
+- **Dataset v3.1** (`configs/battlefield_v31.yaml`):
+  - the v3 battlefield scenes with fixed layering logic;
+  - noise pools audited with an AudioSet tagger (`ancdata/pool_audit.py`), and labels kept only for audible sounds;
+  - a tactical radio link on 90 % of clips (`ancdata/radio.py`: CVSD 16/32 kbit/s with burst bit errors, narrowband FM with fading, clicks and squelch, push-to-talk clipping);
+  - radio-procedure speech (`ancdata/speech_extra.py`: ATCOSIM, Speech Commands, capped Piper TTS), with whisper keyword timings.
+- **Build:**
+  ```
+  ancdata radio-snippets
+  ancdata snippet-words --set radio6s
+  ancdata battlefield --config configs/battlefield_v31.yaml --split test   # then val, train
+  ```
+- **Model:** HubNet (`model/hub_net.py`), 2.6 M params, 18 ms algorithmic latency, single channel, 0-4 kHz. It uses dual-path GRUs and a complex deep filter.
+- **Train and evaluate:** `model/train_hub.py`, `model/evaluate_hub.py`. The targets are SI-SNR > 15 dB, STOI > 0.85 and PESQ-NB > 2.5 against the radio-band target.
+- **Standalone workstation trainer:** `ship/hubnet_standalone/` (see its README).

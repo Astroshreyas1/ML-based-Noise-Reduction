@@ -19,7 +19,8 @@ from torch.utils.data import Dataset
 
 SR = 16000
 HOP = 64
-CLASS_OF = {"gunfire_auto": 1, "gunfire_semi": 1, "gunfire_distant": 1, "blast": 2, "hard_negative": 0}
+CLASS_OF = {"gunfire_auto": 1, "gunfire_semi": 1, "gunfire_distant": 1, "blast": 2, "blast_near": 2, "blast_distant": 2,
+            "hard_negative": 0}   # v4 labels not listed (beds, vehicles, ...) map to 0
 PRE_MS, POST_MS = 50.0, 250.0
 
 
