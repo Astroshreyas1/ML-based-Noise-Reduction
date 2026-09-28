@@ -49,10 +49,18 @@ def load_words(words_dir: Path) -> dict[str, list[dict]]:
     return out
 
 
+HARD = {"urban_patrol", "artillery", "helo_lz"}      # weakest scenarios in the step-16k diagnosis
+
+
 class HubPairs(Dataset):
+    """target="ref": radio clips use the ideal-channel radio reference (<split>/ref, hubnet.make_radio_ref);
+    target="clean": the pre-radio band-limited speech (runs before 2026-09-29)."""
+
     def __init__(self, root: str | Path, crop_seconds: float | None = 2.0, limit: int | None = None, seed: int = 0,
-                 words: dict[str, list[dict]] | None = None):
+                 words: dict[str, list[dict]] | None = None, target: str = "ref", hard_weight: float = 1.5):
         self.root = Path(root)
+        self.target = target
+        self.hard_weight = hard_weight
         self.meta = [json.loads(l) for l in (self.root / "meta.jsonl").open(encoding="utf-8") if l.strip()]
         if limit:
             self.meta = random.Random(seed).sample(self.meta, min(limit, len(self.meta)))
@@ -75,10 +83,15 @@ class HubPairs(Dataset):
     def item(self, i: int, off: int | None = None) -> dict:
         m = self.meta[i]
         noisy = self._read("noisy", m["id"])[:, 0]
-        clean = self._read("clean", m["id"])[:, 0]
         radio = m.get("radio")
-        if not radio:
-            clean = link_filters(clean)
+        if radio and self.target == "ref":
+            clean = self._read("ref", m["id"])[:, 0]
+        else:
+            clean = self._read("clean", m["id"])[:, 0]
+            if not radio:
+                clean = link_filters(clean)
+        n0 = min(len(noisy), len(clean))
+        noisy, clean = noisy[:n0], clean[:n0]
         n = len(noisy)
         valid = np.ones(n, np.float32)
         if radio and radio.get("mute_span"):
@@ -90,16 +103,25 @@ class HubPairs(Dataset):
             if w.get("kw"):
                 kw[max(0, int(w["start"] * SR) - pad): min(n, int(w["end"] * SR) + pad)] = 1.0
         if self.crop and n > self.crop:
-            off = random.randint(0, n - self.crop) if off is None else off
+            if off is None:                         # bias crops toward speech: up to 4 tries for >= 25 % active
+                fr = 320
+                e = np.convolve(clean ** 2, np.ones(fr) / fr, mode="same")
+                act = e > 1e-4 * (e.max() + 1e-12)
+                for _ in range(4):
+                    off = random.randint(0, n - self.crop)
+                    if act[off: off + self.crop].mean() >= 0.25:
+                        break
             sl = slice(off, off + self.crop)
             noisy, clean, valid, kw = noisy[sl], clean[sl], valid[sl], kw[sl]
-        return {"noisy": noisy, "clean": clean, "valid": valid, "kw": kw, "id": m["id"],
+        w = self.hard_weight if (m.get("scenario") in HARD or m.get("gunfire")) else 1.0
+        return {"noisy": noisy, "clean": clean, "valid": valid, "kw": kw, "w": np.float32(w), "id": m["id"],
                 "link": (radio or {}).get("link", "studio"), "snr": float(m["snr_lufs_db"]), "scenario": m["scenario"],
                 "corpus": m.get("speech_corpus")}
 
     def __getitem__(self, i: int) -> dict:
         d = self.item(i)
-        return {k: (torch.from_numpy(np.ascontiguousarray(v)) if isinstance(v, np.ndarray) else v) for k, v in d.items()}
+        return {k: (torch.from_numpy(np.ascontiguousarray(v)) if isinstance(v, np.ndarray) else
+                    torch.tensor(v) if isinstance(v, np.floating) else v) for k, v in d.items()}
 
 
 def collate(batch: list[dict]) -> dict:

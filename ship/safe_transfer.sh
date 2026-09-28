@@ -5,7 +5,7 @@
 # stream 17GB in one shot again.
 set -euo pipefail
 SSH_KEY=~/.ssh/anc_workstation
-HOST=ccps@172.1.40.74
+HOST=${HOST:?set HOST=user@workstation}
 MIN_FREE_GB=4   # abort if free space would drop below this after the next split
 
 remote_free_gb() {

@@ -47,3 +47,8 @@ hub_suite/artefacts/
 hub_suite/runs/
 hub_suite/finetune/data/
 hub_suite/*.log
+hub_suite/data_asr/
+hub_suite/runs_asr/
+
+# local diagnosis runs / checkpoints
+runs/
