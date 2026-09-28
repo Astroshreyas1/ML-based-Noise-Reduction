@@ -1,4 +1,4 @@
-# usage: .\run_train.ps1 D:\data\battlefield_v31
+# Windows workstation: .\run_train.ps1 D:\data\battlefield_v31
 param([Parameter(Mandatory=$true)][string]$Data)
 Set-Location $PSScriptRoot
 python -m hubnet.bench

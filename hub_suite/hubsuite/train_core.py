@@ -32,7 +32,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, DistributedSampler
 
-from .data import HubPairs, collate, load_words
+from .pairs import HubPairs, collate, load_words
 from .hub_net import HubNet
 
 
@@ -150,7 +150,7 @@ def main() -> None:
     ap.add_argument("--workers", type=int)
     ap.add_argument("--val-every", type=int)
     ap.add_argument("--checkpointing", choices=["auto", "on", "off"], default="auto")
-    ap.add_argument("--compile", action="store_true", help="torch.compile the model (Linux; try it, ~10-30%% faster)")
+    ap.add_argument("--compile", action="store_true", help="torch.compile the model (Linux; try it, ~10-30 % faster)")
     a = ap.parse_args()
 
     ddp = "RANK" in os.environ
@@ -163,11 +163,8 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     hp = HP()
     vram = torch.cuda.get_device_properties(device).total_memory / 2 ** 30 if device.type == "cuda" else 0
+    hp.batch = a.batch or int(min(64, 8 * max(1, round(vram / 6))))
     hp.checkpointing = {"on": True, "off": False}.get(a.checkpointing, vram < 16)
-    # measured on the laptop (batch 8 x 2 s): 8.4 GiB without checkpointing, 2.6 GiB with it -> per-sample cost;
-    # use 65 % of VRAM, multiple of 8, cap 64 (48 GB, no checkpointing -> 24)
-    per_sample = (8.4 if not hp.checkpointing else 2.6) / 8
-    hp.batch = a.batch or int(max(8, min(64, (vram * 0.65 / per_sample) // 8 * 8)))
     if a.samples:
         hp.samples = a.samples
     if a.workers is not None:
@@ -175,7 +172,7 @@ def main() -> None:
     if a.val_every:
         hp.val_every = a.val_every
     hp.steps = a.steps or int(math.ceil(hp.samples / (hp.batch * world)))
-    lr = hp.lr * min(2.0, math.sqrt(hp.batch * world / 8))       # sqrt scaling, capped (GRUs dislike big LRs)
+    lr = hp.lr * math.sqrt(hp.batch * world / 8)
     warmup = max(500, int(hp.warmup_frac * hp.steps))
     main_proc = rank == 0
 

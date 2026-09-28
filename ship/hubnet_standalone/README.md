@@ -43,7 +43,7 @@ The trainer sizes itself to the GPU.
 
 **Schedule**
 - The default schedule is 1.6 M crops of 2 s, about 888 h of audio. That is the laptop's plan of 200k steps × batch 8.
-- Batch per GPU is 8 per 6 GB of VRAM, capped at 64. Steps are then samples ÷ (batch × GPUs). The learning rate scales with √(total batch ÷ 8).
+- Batch per GPU is sized from memory: about 65 % of VRAM, at 1.05 GB per sample without checkpointing (0.33 GB with it), a multiple of 8, capped at 64. On a 48 GB card that is 24. Steps are then samples ÷ (batch × GPUs). The learning rate scales with √(total batch ÷ 8), capped at 2×.
 - Validation runs every 4,000 steps on 192 fixed val pairs. It reports SI-SNR, STOI and PESQ-NB against their input values.
 - The run writes `ckpt_best.pt`, `ckpt_last.pt` and `log.csv`.
 

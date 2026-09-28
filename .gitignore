@@ -41,3 +41,9 @@ ship/**/runs/
 docs/
 !docs/LIT_REVIEW.md
 model/runs_*.log
+
+# hub_suite: large binary artefacts and run outputs stay local
+hub_suite/artefacts/
+hub_suite/runs/
+hub_suite/finetune/data/
+hub_suite/*.log

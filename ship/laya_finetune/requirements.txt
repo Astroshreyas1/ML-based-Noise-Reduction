@@ -1,0 +1,8 @@
+# Python >= 3.10. Install torch for your CUDA first, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+torch>=2.3
+laya>=0.1.6
+transformers>=4.48
+safetensors
+huggingface_hub
+numpy

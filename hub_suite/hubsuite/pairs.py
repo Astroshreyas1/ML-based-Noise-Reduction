@@ -66,9 +66,7 @@ class HubPairs(Dataset):
         for ext in (".flac", ".wav"):
             p = self.root / sub / f"{stem}{ext}"
             if p.exists():
-                x, fs = sf.read(str(p), dtype="float32", always_2d=True)
-                if fs != SR:                               # repacked at 8 kHz for a small disk: back to 16 kHz
-                    x = resample_poly(x, SR // np.gcd(SR, fs), fs // np.gcd(SR, fs), axis=0).astype(np.float32)
+                x, _ = sf.read(str(p), dtype="float32", always_2d=True)
                 return x
         raise FileNotFoundError(f"{self.root / sub / stem}")
 
